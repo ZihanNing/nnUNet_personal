@@ -114,3 +114,11 @@ ENV/
 *.model
 
 !documentation/assets/scribble_example.png
+
+
+
+# Data related
+ddMRI_raw/
+nnUNet_preprocessed/
+nnUNet_raw/
+nnUNet_results/

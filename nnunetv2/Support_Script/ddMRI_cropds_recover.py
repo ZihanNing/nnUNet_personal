@@ -22,7 +22,17 @@ from scipy.ndimage import zoom
 import json
 
 
-TARGET_FOV_MM = np.array([150.0, 160.0, 144.0], dtype=float)
+# --- define target FOV by anatomical meaning (do NOT assume array axis order here)
+# RL = Right-Left, AP = Anterior-Posterior, SI = Superior-Inferior (Head-Foot)
+TARGET_FOV_BY_AXIS_MM = {
+    "RL": 144.0,
+    "AP": 160.0,
+    "SI": 150.0,
+}
+
+# placeholder: will be filled per-volume after canonicalisation using affine axcodes
+TARGET_FOV_MM = np.array([np.nan, np.nan, np.nan], dtype=float)
+
 TARGET_VOX_MM = np.array([2.0, 2.0, 2.0], dtype=float)
 TARGET_SHAPE = np.array([75, 80, 72], dtype=int)
 
@@ -120,12 +130,12 @@ def compute_crop_indices(
         else:  # 'P'
             keep_low_index_side(axis_ap)
 
-        # --- HF: keep Superior (head side) ---
+        # --- HF: keep Interior (foot side) ---
         # If axis code is 'S', superior is high-index; if 'I', superior is low-index.
         if axcodes[axis_hf] == "S":
-            keep_high_index_side(axis_hf)
-        else:  # 'I'
             keep_low_index_side(axis_hf)
+        else:  # 'I'
+            keep_high_index_side(axis_hf)
 
     elif mode == "mprage":
         # RL: centre already set above
@@ -227,6 +237,27 @@ def preprocess(infile, outfile, mode, is_label):
 
     print(f"[INFO] Orientation after canonical: {aff2axcodes(affine)}")
 
+    # ---- map TARGET_FOV_BY_AXIS_MM (RL/AP/SI) onto data axes using current axcodes
+    axcodes = aff2axcodes(affine)  # e.g. ('R','A','S') after canonical
+
+    target_fov_mm = np.zeros(3, dtype=float)
+    for i, c in enumerate(axcodes):
+        if c in ("R", "L"):
+            target_fov_mm[i] = TARGET_FOV_BY_AXIS_MM["RL"]
+        elif c in ("A", "P"):
+            target_fov_mm[i] = TARGET_FOV_BY_AXIS_MM["AP"]
+        elif c in ("S", "I"):
+            target_fov_mm[i] = TARGET_FOV_BY_AXIS_MM["SI"]
+        else:
+            raise RuntimeError(f"Unknown axis code {c} in axcodes={axcodes}")
+
+    # overwrite the global-style variable used by later code paths (FOV check + cropping)
+    global TARGET_FOV_MM
+    TARGET_FOV_MM = target_fov_mm
+
+    print("[DEBUG] TARGET_FOV_MM aligned to data axes:", TARGET_FOV_MM)
+
+
     shape_xyz = np.array(data.shape[:3], dtype=int)
     vox_mm = voxel_sizes_from_affine(affine)
     in_fov = fov_mm(shape_xyz, vox_mm)
@@ -243,6 +274,11 @@ def preprocess(infile, outfile, mode, is_label):
             "axcodes": raw_axcodes               # scanner-native orientation
         }
     }
+
+    print("[DEBUG] Input shape (vox):", shape_xyz)
+    print("[DEBUG] Voxel size (mm):", vox_mm)
+    print("[DEBUG] Input FOV (mm):", in_fov)
+    print("[DEBUG] Required FOV (mm):", TARGET_FOV_MM)
 
     if np.any(in_fov + EPS_MM < TARGET_FOV_MM):
         raise RuntimeError("Input FOV too small")
